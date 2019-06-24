@@ -1,0 +1,260 @@
+---
+title: "Assignment 4"
+author: "Sushant Kataria & Abdullah Irfan"
+date: "April 3, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library('ggplot2')
+library(TTR)
+library(tseries)
+library(forecast)
+library(stats)
+```
+##What is time-series data?
+Data that has some variable which changes over the period of time, example of it can be sales, stock prices, weather etc.
+
+##What are the four components of time series?
+#####Time series data is affected by 4 main components
+#####1) Trend - Overall change and pattern of the data. Exmaple: Increasing sales with time throughout the year
+#####2) Seasonality - Changes over period of time, periodic changes. Example Sales of warm clothes. Each winter warm clothes increease and sales peak in december, every december.
+#####3) Cyclicity - Seasonality is annual pattern, cyclicity is random patterns example of Recession.
+#####4) Irregularity- Random component of time series data. Which cannot be explained. Example constant price over period of time
+
+##What are the conditions needed to perform time series analysis?
+Conditions for Time Series: Data has to be stationary, most cases it is not. You need to make it stationary
+
+##What is non-stationary data?
+If data has the 4 components it means it is not stationary and most times its raw, so you have to make it stationary data.
+
+##How do you differentiate from stationary to non-stationary?
+Visually, stationary data would be flatish and not show an upward trend as in increasing trend over time.
+
+###Stationarity measured through: Mean , variance and co-variance 
+#####Mean: For stationarity: Mean should remain constant over a period of time, at time t & t + 1
+#####Variance: Variance should reamin constant over period of time.
+#####Covariance: should not change with respect to time for i and i+1 term which means Hour =1 and hour= 2 covaraiance should remain the same.
+
+##Now that we have defined what time-series is we will define our analysis, data source, approach & evaluation.
+
+
+###The data was taken from http://reports.ieso.ca/public/DemandZonal/ which are the hourly zonal demand for zones and we will include our analysis for the zone of toronto.
+
+#*************************************************************************************************************
+
+### Our Analysis:
+Our objective is to find energy output trend of Toronto from Ontario Electricity supply operator based on the quaterly data from 2003 to 2017.
+We will perform a Univariate Autoregressive Integrated Moving Average to learn the pattern of OVERALL ENERGY OUTPUT and then perform prediction on test data of next 4 months.
+
+
+### Our data source:
+The data source is www.ieso.ca. There are a total of 59 rows with granuality of one row showing energy output in any quarter of that year. The data has 3 regions so on any given date there can be 3 records (West,Southwest and Toronto). For the sake of simplicity we are just keeping our Analysis to analyze overall energy output in Toronto.
+
+###Approach
+#####1) Data Preprocessing & Exploratory Data Analysis (Relevant to Time Series only)
+#####2) Analysis of Assumptions (Stationarity test) & Data transformation to stationary
+#####3) Implementing ARIMA Model
+#####4) Prediction based on ARIMA model 
+#####5) Evaluation (Test vs Expected)
+ 
+
+###1) Data Import Preprocessing and EDA
+
+Step 1: Data Imports
+```{r}
+#Choose file: PUB_DemandZonal_2018_v254 (1)
+data_2018 <- read.csv(file.choose(),header=T)
+```
+
+```{r}
+str(data_2018)
+data_2018$Date<- as.Date(data_2018$Date, format = "%m/%d/%Y")
+library(zoo)
+data_2018$Qtr <- as.yearqtr(data_2018$Date, format = "%m/%d/%Y")
+data_2018$Year<-substr(data_2018$Qtr, 1, 4)
+data_2018$Qtr<-substr(data_2018$Qtr, 7, 7)
+data.2018<-select(data_2018,Year, Qtr, West,Southwest,Toronto)
+data.2018$Qtr<-paste('Qtr',data.2018$Qtr)
+data.grouped<-aggregate(x = data.2018[c("West","Southwest","Toronto")],
+                     FUN = sum,
+                       by = list(Qtr= data.2018$Qtr))
+data.grouped$Year<-'2018'
+data.grouped<-select(data.grouped,Year,Qtr,West,Southwest,Toronto)
+```
+
+```{r}
+###Data from 2003 to 2017
+#Choose file: Quarterly.csv
+quaterly_data <- read.csv(file.choose(), header = T)
+```
+
+
+Step 2: Date Preprocessing 
+
+```{r}
+#Combining it with 2018
+quaterly_data<-rbind(quaterly_data,data.grouped)
+str(quaterly_data)
+```
+
+Step 3: Data Preprocessing Cont: Subsecting Torontos quarterly_data
+```{r}
+### Toronto ###
+quaterly_torontowhole <- data.frame(quaterly_data$Qtr, quaterly_data$Year, quaterly_data$Toronto)
+q_toronto <- quaterly_torontowhole %>% slice(4:63)
+q_toronto
+```
+
+
+Step 4: Convert into timeseries data with frequency of 4 as quarterly data
+```{r}
+q_toronto_ts <- ts(q_toronto , frequency = 4)
+quaterly_toronto_ts <- ts(q_toronto, frequency = 4, start = c(2004,1), end = c(2017,4))
+head(quaterly_toronto_ts)
+```
+ 
+
+
+###2) Analysis of Assumptions (Stationarity test) & Data transformation to stationary
+
+Step 1: Decomposing data to Visualie Stationarity: seasonality, trend & irregularity (random) component
+```{r}
+ts.plot(quaterly_toronto_ts[,3])
+plot(decompose(quaterly_toronto_ts[ ,3]))
+```
+#### As we can see from the plot, a seasonal component is present in the data but no significant trend.
+
+```{r}
+acf(quaterly_toronto_ts[ ,3])
+pacf(quaterly_toronto_ts[ ,3])
+tsdisplay(quaterly_toronto_ts[ ,3])
+```
+
+#### As we can see from the plot, a seasonal component is present in the data. There is significant auto-correlation at lag 1,2,3,4,5 and beyond. Partial correlation shows a spike through lag 1-5. Thus we can say that the data is not stationary. 
+
+Step 2: Calculative measure to confirm non-stationarity: Dickey Fuller Test.
+
+####Null Hypothesis (H0): If failed to be rejected, it suggests the time series has a unit root, meaning it is non-stationary. It has some time dependent structure.
+####Alternate Hypothesis (H1): The null hypothesis is rejected; it suggests the time series does not have a unit root, meaning it is stationary. It does not have time-dependent structure.
+
+```{r}
+#test for stationary data
+adf.test(quaterly_toronto_ts[ , 3]) #hence the data is non stationary
+```
+
+#### The p - value is greater than 0.05 which means that it is significant and we will not reject the NULL hypothesis. So in conclusion our data is infact non-stationary.
+
+Step 3: Making data Stationary by Differencing at yearly, quarter, month level
+```{r}
+### Seasonal Differencing ### we have to remove seasonality from the data as their is no trend in the data
+#year
+quaterly_toronto_diff <- diff(quaterly_toronto_ts[ ,3], lag = 4)
+tsdisplay(quaterly_toronto_diff)
+
+#figure out the vcalue of k
+```
+```{r}
+
+#quater
+quarter.data <- diff(quaterly_toronto_diff, lag = 12)
+tsdisplay(quarter.data)
+
+```
+```{r}
+#month
+month.data <- diff(quarter.data, lag = 4)
+tsdisplay(month.data)
+```
+#### Value for p =3 from above.
+
+Step 4: Verifying 3rd order differencing to check Stationarity at month level with Dickey Fuller Test 
+```{r}
+adf.test(month.data)
+
+```
+#### Dickey fuller test now shows data is stationary! Hoorah!
+
+###3) Implementing ARIMA Model
+
+Step 1: Making Training data & Testing Data
+```{r}
+#data splitting
+
+dup1_q_toronto <- q_toronto
+dup2_q_toronto <- q_toronto
+
+#Training (2003 to 2015)
+toronto_training_set <- data.frame(dup1_q_toronto %>% slice(1:47))
+
+toronto_training_set_ts <- ts(toronto_training_set , frequency = 4)
+plot.ts(toronto_training_set_ts[,3])
+
+#Testing from 2015 to 2018
+toronto_test_set <- data.frame(dup2_q_toronto %>% slice(48:63))
+
+toronto_test_set_ts <- ts(toronto_test_set , frequency = 4)
+plot.ts(toronto_test_set_ts[,3])
+```
+#### Above plots contain training and test data 
+
+Step 2: Runing ARIMA on training data set
+```{r}
+## Model with seasonality with p=3, d=0, q=0
+arima <- Arima(toronto_training_set_ts[ ,3], order = c(3,0,0))
+arima
+```
+#### Our AIC value is 1360.91 
+
+
+```{r}
+#residual plots
+qqnorm(arima$residuals)
+acf(arima$residuals)
+pacf(arima$residuals)
+```
+#### Looking at the results of the acf and pacf there are no other lags that are significant which shows that there is no more information inside resiudals that can be used for prediction.
+
+#####4) Prediction based on ARIMA model 
+```{r}
+## We are Forecasting for h=13 from training data
+forecasted <- forecast(toronto_training_set_ts[ ,3], h=13 )
+plot(forecasted,main="")
+
+```
+
+
+
+
+#####5) Evaluation of test vs predicted
+
+Step 1: Analyzing RMSE
+```{r}
+toronto_predicted <- forecasted$mean
+toronto_model_error <- toronto_test_set[ ,3] - toronto_predicted
+accuracy(toronto_predicted,toronto_test_set[ ,3])
+```
+### The result show an RMSE of 562410.1 MW of ENERGY for the predicted data from Q4 of 2015 to Q4 of 2018
+
+Step 2: Visual verification
+```{r}
+#Actual
+plot.ts(q_toronto_ts[c(48:60),3])
+#Predicted
+plot(forecasted$mean,main="")
+```
+#### The above blue line gives us the predicted values with 95% confidence for each of the 13 test points 
+
+Step 3: Calculative Verification
+```{r}
+toronto_test_set_dup<- toronto_test_set
+toronto_test_set_dup$PredictedValues <-  (forecasted$mean)
+toronto_test_set_dup<-select(toronto_test_set_dup,quaterly_data.Qtr,quaterly_data.Toronto,PredictedValues)
+ toronto_test_set_dup$Errors<- toronto_test_set_dup$quaterly_data.Toronto-toronto_test_set_dup$PredictedValues
+ toronto_test_set_dup
+```
+
+####Conclusion:
+#####As you can see from the results our RMSE 562410.1 MW per quarter, looking at the PredictedValues and the quarterly_data.Toronto Column our predictions were infact close, but the reuslts could've been better and werent because the data was hourly and we grouped it together losing out on the granuality of information.
